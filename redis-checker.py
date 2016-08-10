@@ -122,7 +122,7 @@ def checkAOF(r, info):
         reasons.append((CHECK, "appendfsync is always. It can cause performance issue"))
     
     per = int(r.config_get("auto-aof-rewrite-percentage")["auto-aof-rewrite-percentage"])
-    size = byteToStr(int(r.config_get("auto-aof-rewrite-min-size")["auto-aof-rewrite-min-size"]))
+    size = bytesToStr(int(r.config_get("auto-aof-rewrite-min-size")["auto-aof-rewrite-min-size"]))
 
     if per != 0:
         danger = True
