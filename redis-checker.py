@@ -7,6 +7,7 @@ import time
 
 KEYS_GAP = 0
 CONN_GAP = 100
+MAXCLIENTS = 10000
 
 INFO = 0
 CHECK = 1
@@ -130,6 +131,14 @@ def checkAOF(r, info):
 
     return reasons
 
+def checkMaxClients(r, info):
+    reasons = []
+    maxclients = int(r.config_get("maxclients")["maxclients"])
+    if maxclients < MAXCLIENTS:
+        reasons.append((CHECK, "MaxClients is too small. current %s, recommend: 50000"%(maxclients)))
+
+    return reasons
+
 def checkDangerCommands(r, info):
     #cmdstat_setex:calls=1486470,usec=3265266,usec_per_call=2.20
     ret = 0
@@ -159,7 +168,7 @@ def overGap(t, gap):
     return False
 
         
-def report(r, mem, rdb, aof, timeInfos):
+def report(r, mem, rdb, aof, maxclients, timeInfos):
     print("===================================================")
     print("Host: %s:%s"%(redisHost(r), redisPort(r)))
     print("===================================================")
@@ -169,6 +178,12 @@ def report(r, mem, rdb, aof, timeInfos):
     print("Ratio               : %s"%(mem[2]))
     print("Server Mem          : %s"%(mem[3]))
     print("===================================================")
+    if len(maxclients) > 0:
+        print("Client Setting")
+        t = maxclients[0] 
+        print("%s: %s"%(toStr(t[0]), t[1]))
+
+        print("===================================================")
     if len(rdb) > 0:
         print("RDB: %s"%len(rdb))
         for t in rdb:
@@ -205,6 +220,7 @@ def redisCheck(r):
     memoryInfo = checkMemory(r, info)
     rdbInfo = checkRDB(r, info)
     aofInfo = checkAOF(r, info)
+    maxclientInfo = checkMaxClients(r, info)
 
     n_conn = []
     n_commands = []
@@ -216,7 +232,7 @@ def redisCheck(r):
         time.sleep(1)
         info = r.info('all')
 
-    report(r, memoryInfo, rdbInfo, aofInfo, (n_keys, n_conn, n_commands))
+    report(r, memoryInfo, rdbInfo, aofInfo, maxclientInfo, (n_keys, n_conn, n_commands))
 
 
 if __name__ == '__main__':
