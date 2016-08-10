@@ -177,7 +177,7 @@ def report(r, mem, rdb, aof, timeInfos):
         print("===================================================")
     if len(aof) > 0:
         print("AOF: %s"%len(aof))
-        for t in rdb:
+        for t in aof:
             print("%s: %s"%(toStr(t[0]), t[1]))
         print("===================================================")
     print("ETC")
