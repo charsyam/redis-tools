@@ -69,7 +69,7 @@ def getRedisConn(url):
         passwd = parts[2]
 
     hostname = parts[0]
-    r = redis.Redis(host=hostname, port=port, password=passwd)
+    r = redis.Redis(host=hostname, port=port, password=passwd, socket_timeout=2)
     try:
         ver = r.info()['redis_version']
         r.ver = ver
