@@ -3,6 +3,35 @@ import sys
 import argparse
 import time
 
+class Checker(object):
+    def __init__(self):
+        self.funcs = []
+
+    def register(self, **options):
+        def decorator(f):
+            name = options.pop("name", f.__name__)
+            self.add_checker(name, f, **options)
+            return f
+        return decorator
+
+    def add_checker(self, name, f, **options):
+        self.funcs.append((f, options))
+
+    def call(self, r, info, reportFunc):
+        for func in self.funcs:
+            t = func
+            f = t[0]
+            if "title" in t[1]:
+                title = t[1]["title"]
+            else:
+                title = f.__name__
+
+            reasons = f(r, info)
+            if len(reasons) > 0:
+                reportFunc(title, reasons)
+
+checker = Checker()
+
 KEYS_GAP = 0
 CONN_GAP = 100
 MAXCLIENTS = 10000
@@ -74,6 +103,7 @@ def getRedisConn(url):
 
     return r
 
+@checker.register(title="Memory Status")
 def checkMemory(r, info):
     mem = bytesToStr(int(info['used_memory']))
     rss = bytesToStr(int(info['used_memory_rss']))
@@ -83,8 +113,15 @@ def checkMemory(r, info):
     else:
         total = "N/A"
 
-    return (mem, rss, ratio, total)
+    reasons = []
+    reasons.append((INFO, "Used Memory in Redis: %s"%(mem)))
+    reasons.append((INFO, "Real Memory in OS   : %s"%(rss)))
+    reasons.append((INFO, "Fragmentation Ratio : %s"%(ratio)))
+    reasons.append((INFO, "Server Memory       : %s"%(total)))
+    
+    return reasons
 
+@checker.register(title="RDB Status")
 def checkRDB(r, info):
     reasons = []
     default = ['3600', '1', '300', '100', '60', '10000']
@@ -103,6 +140,7 @@ def checkRDB(r, info):
 
     return reasons
 
+@checker.register(title="AOF Status")
 def checkAOF(r, info):
     #"auto-aof-rewrite-percentage"
     #"100"
@@ -132,6 +170,7 @@ def checkClients(r, info):
     reasons.extend(checkOutputBufferLimites(r, info))
     return reasons
 
+@checker.register(title="MAX Clients Status")
 def checkMaxClients(r, info):
     reasons = []
     maxclients = int(r.config_get("maxclients")["maxclients"])
@@ -140,6 +179,7 @@ def checkMaxClients(r, info):
 
     return reasons
 
+@checker.register(title="Replication outputBufferLimits Status")
 def checkOutputBufferLimites(r, info):
     '''
     normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60
@@ -189,78 +229,39 @@ def overGap(t, gap):
 
     return False
 
+def reportFunc(title, reasons):
+    print("===================================================")
+    print(title)
+    for t in reasons:
+        print("%s: %s"%(toStr(t[0]), t[1]))
         
-def report(r, **kwargs):
-    mem = kwargs["mem"]
-    rdb = kwargs["rdb"]
-    aof = kwargs["aof"]
-    clients = kwargs["clients"]
-    timed = kwargs["timed"]
-    
-    print("===================================================")
-    print("Host: %s:%s"%(redisHost(r), redisPort(r)))
-    print("===================================================")
-    print("Memory")
-    print("Used Memory in Redis: %s"%(mem[0]))
-    print("Real Memory in OS   : %s"%(mem[1]))
-    print("Ratio               : %s"%(mem[2]))
-    print("Server Mem          : %s"%(mem[3]))
-    print("===================================================")
-    if len(clients) > 0:
-        print("Client Setting")
-        for t in clients:
-            print("%s: %s"%(toStr(t[0]), t[1]))
-
-        print("===================================================")
-    if len(rdb) > 0:
-        print("RDB: %s"%len(rdb))
-        for t in rdb:
-            print("%s: %s"%(toStr(t[0]), t[1]))
-
-        print("===================================================")
-    if len(aof) > 0:
-        print("AOF: %s"%len(aof))
-        for t in aof:
-            print("%s: %s"%(toStr(t[0]), t[1]))
-        print("===================================================")
-    print("ETC")
-
-    n_keys = timed[0]
-    n_conns = timed[1]
-    n_commands = timed[2]
-
-    keysGap = arrayGap(n_keys)
-    if overGap(keysGap, KEYS_GAP):
-        print "Danger: Don't use Keys Command: %s"%(keysGap)
-
-    connGap = arrayGap(n_conns)
-    if overGap(connGap, CONN_GAP):
-        print "Check: Connections are frequently changed : %s"%(connGap)
-
-    commGap = arrayGap(n_commands)
-    print "Info: commands per sec : %s"%(commGap)
-    print("===================================================")
-
   
-def redisCheck(r):
+@checker.register(title="ETC: Timed Information")
+def redisTimedCheck(r, info):
+    reasons = []
     info = r.info('all')
 
-    mem = checkMemory(r, info)
-    rdb = checkRDB(r, info)
-    aof = checkAOF(r, info)
-    clients = checkClients(r, info)
-
-    n_conn = []
+    n_conns = []
     n_commands = []
     n_keys = []
     for i in range(CHECK_SECONDS):
         n_keys.append(checkDangerCommands(r, info))
-        n_conn.append(checkConnectedClients(r, info))
+        n_conns.append(checkConnectedClients(r, info))
         n_commands.append(checkCommands(r, info))
         time.sleep(1)
         info = r.info('all')
 
-    report(r, mem=mem, rdb=rdb, aof=aof, clients=clients, timed=(n_keys, n_conn, n_commands))
+    keysGap = arrayGap(n_keys)
+    if overGap(keysGap, KEYS_GAP):
+        reasons.append((DANGER, "Don't use Keys Command: %s"%(keysGap)))
+
+    connGap = arrayGap(n_conns)
+    if overGap(connGap, CONN_GAP):
+        reasons.append((CHECK, "Connections are frequently changed : %s"%(connGap)))
+
+    commGap = arrayGap(n_commands)
+    reasons.append((INFO, "Commands per sec : %s"%(commGap)))
+    return reasons
 
 
 if __name__ == '__main__':
@@ -277,6 +278,6 @@ if __name__ == '__main__':
     else:
         CHECK_SECONDS = 5
     
-    src = getRedisConn(args.src)
-
-    redisCheck(src)
+    r = getRedisConn(args.src)
+    info = r.info()
+    checker.call(r, info, reportFunc) 
