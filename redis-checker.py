@@ -1,8 +1,6 @@
 import redis
 import sys
 import argparse
-import urlparse
-import os
 import time
 
 KEYS_GAP = 0
@@ -23,7 +21,6 @@ LEVELS = [
 
 def toStr(i):
     return LEVELS[i]
-      
 
 def fail(msg):
     print >> sys.stderr, msg
@@ -59,7 +56,6 @@ def bytesToStr(bytes):
     return '%dGB'%(bytes/(1024*1024*1024))
 
 def getRedisConn(url):
-    res = []
     parts = url.split(':')
     port = 6379
     passwd = None
@@ -116,7 +112,7 @@ def checkAOF(r, info):
     reasons = []
     appendonly = r.config_get("appendonly")["appendonly"]
     if appendonly == 'no':
-        return []
+        return reasons
 
     appendfsync = r.config_get("appendfsync")["appendfsync"]
     if appendfsync == "always":
@@ -126,9 +122,14 @@ def checkAOF(r, info):
     size = bytesToStr(int(r.config_get("auto-aof-rewrite-min-size")["auto-aof-rewrite-min-size"]))
 
     if per != 0:
-        danger = True
         reasons.append((WARNING, "AOF can be auto generated. per: %s, size: %s"%(per, size)))
 
+    return reasons
+
+def checkClients(r, info):
+    reasons = []
+    reasons.extend(checkMaxClients(r, info))
+    reasons.extend(checkOutputBufferLimites(r, info))
     return reasons
 
 def checkMaxClients(r, info):
@@ -136,6 +137,27 @@ def checkMaxClients(r, info):
     maxclients = int(r.config_get("maxclients")["maxclients"])
     if maxclients < MAXCLIENTS:
         reasons.append((CHECK, "MaxClients is too small. current %s, recommend: 50000"%(maxclients)))
+
+    return reasons
+
+def checkOutputBufferLimites(r, info):
+    '''
+    normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60
+    '''
+
+    mem = int(info['used_memory'])
+    rss = int(info['used_memory_rss'])
+
+    reasons = []
+    ret = r.config_get("client-output-buffer-limit")["client-output-buffer-limit"]
+    parts = ret.split()
+    if parts[3] == 'slave':
+        hard = int(parts[4])
+        soft = int(parts[5])
+
+        if mem > (9 * 1024 * 1024 * 1024):
+            if hard < (512 * 1024 * 1024):
+                reasons.append(CHECK, "client-output-buffer-limit is small for slave. up it to least 512MB")
 
     return reasons
 
@@ -147,7 +169,7 @@ def checkDangerCommands(r, info):
          
     return ret
 
-def checkClients(r, info):
+def checkConnectedClients(r, info):
     return (int(info['connected_clients'])) 
 
 def checkCommands(r, info):
@@ -168,7 +190,13 @@ def overGap(t, gap):
     return False
 
         
-def report(r, mem, rdb, aof, maxclients, timeInfos):
+def report(r, **kwargs):
+    mem = kwargs["mem"]
+    rdb = kwargs["rdb"]
+    aof = kwargs["aof"]
+    clients = kwargs["clients"]
+    timed = kwargs["timed"]
+    
     print("===================================================")
     print("Host: %s:%s"%(redisHost(r), redisPort(r)))
     print("===================================================")
@@ -178,10 +206,10 @@ def report(r, mem, rdb, aof, maxclients, timeInfos):
     print("Ratio               : %s"%(mem[2]))
     print("Server Mem          : %s"%(mem[3]))
     print("===================================================")
-    if len(maxclients) > 0:
+    if len(clients) > 0:
         print("Client Setting")
-        t = maxclients[0] 
-        print("%s: %s"%(toStr(t[0]), t[1]))
+        for t in clients:
+            print("%s: %s"%(toStr(t[0]), t[1]))
 
         print("===================================================")
     if len(rdb) > 0:
@@ -197,9 +225,9 @@ def report(r, mem, rdb, aof, maxclients, timeInfos):
         print("===================================================")
     print("ETC")
 
-    n_keys = timeInfos[0]
-    n_conns = timeInfos[1]
-    n_commands = timeInfos[2]
+    n_keys = timed[0]
+    n_conns = timed[1]
+    n_commands = timed[2]
 
     keysGap = arrayGap(n_keys)
     if overGap(keysGap, KEYS_GAP):
@@ -217,22 +245,22 @@ def report(r, mem, rdb, aof, maxclients, timeInfos):
 def redisCheck(r):
     info = r.info('all')
 
-    memoryInfo = checkMemory(r, info)
-    rdbInfo = checkRDB(r, info)
-    aofInfo = checkAOF(r, info)
-    maxclientInfo = checkMaxClients(r, info)
+    mem = checkMemory(r, info)
+    rdb = checkRDB(r, info)
+    aof = checkAOF(r, info)
+    clients = checkClients(r, info)
 
     n_conn = []
     n_commands = []
     n_keys = []
     for i in range(CHECK_SECONDS):
         n_keys.append(checkDangerCommands(r, info))
-        n_conn.append(checkClients(r, info))
+        n_conn.append(checkConnectedClients(r, info))
         n_commands.append(checkCommands(r, info))
         time.sleep(1)
         info = r.info('all')
 
-    report(r, memoryInfo, rdbInfo, aofInfo, maxclientInfo, (n_keys, n_conn, n_commands))
+    report(r, mem=mem, rdb=rdb, aof=aof, clients=clients, timed=(n_keys, n_conn, n_commands))
 
 
 if __name__ == '__main__':
